@@ -1,6 +1,8 @@
 # Compiled binaries
 server_c
 server_cpp
+proxy_c
+proxy_cpp
 
 # macOS
 .DS_Store
