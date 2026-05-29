@@ -1,0 +1,6 @@
+# Compiled binaries
+server_c
+server_cpp
+
+# macOS
+.DS_Store
