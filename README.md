@@ -19,6 +19,7 @@ This project builds a real `.app` bundle with:
 |------|---------|
 | `mac-browser/Browser.m` | Objective-C AppKit + WebKit browser app |
 | `mac-browser/Info.plist` | macOS app bundle metadata |
+| `mcp-history-server/server.mjs` | Read-only MCP server for MiniBrowser history |
 | `Makefile` | Builds and opens `MiniBrowser.app` |
 
 ## Build
@@ -51,6 +52,38 @@ open MiniBrowser.app
 make clean
 ```
 
+## History MCP Server
+
+MiniBrowser writes its own browsing history to:
+
+```text
+~/Library/Application Support/MiniBrowser/history.jsonl
+```
+
+The MCP server reads that file and exposes read-only tools:
+
+- `browser_status`
+- `history_recent`
+- `history_search`
+- `history_by_domain`
+- `history_top_domains`
+
+Install dependencies:
+
+```sh
+make mcp-install
+```
+
+Run the MCP server over stdio:
+
+```sh
+make run-history-mcp
+```
+
+The server intentionally does **not** read Chrome profiles, decrypt Keychain
+data, copy cookies, or expose session cookies. Cookies are account credentials;
+MiniBrowser keeps WebKit cookies inside WebKit's own browser storage.
+
 ## How It Works
 
 `main()` starts an `NSApplication` and installs `BrowserAppDelegate` as the app
@@ -75,6 +108,9 @@ The web page itself is rendered by WebKit:
 - `goBack`, `goForward`, and `reload` control navigation.
 - Key-value observing tracks `estimatedProgress`, `URL`, `canGoBack`, and
   `canGoForward` so the UI stays in sync.
+- Finished navigations append redacted history entries to `history.jsonl`.
+- The MCP server reads `history.jsonl` and exposes safe browsing-history lookup
+  tools to MCP clients.
 
 This is a native browser shell, not a custom browser engine. WebKit handles the
 browser engine work: parsing HTML, applying CSS, running JavaScript, loading

@@ -1,5 +1,8 @@
 # Generated app bundle
 MiniBrowser.app
 
+# Node dependencies
+node_modules
+
 # macOS
 .DS_Store

@@ -15,6 +15,7 @@
 @property (nonatomic, strong) NSButton *reloadButton;
 @property (nonatomic, strong) NSProgressIndicator *progressBar;
 @property (nonatomic, strong) NSTextField *statusLabel;
+@property (nonatomic, copy) NSString *lastRecordedURL;
 @end
 
 @implementation BrowserAppDelegate
@@ -29,12 +30,18 @@ static void *BrowserCanGoForwardContext = &BrowserCanGoForwardContext;
 
     [self buildMenu];
     [self buildWindow];
+    [self writeBrowserStateRunning:YES];
     [self loadURLString:@"https://www.google.com"];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     (void)sender;
     return YES;
+}
+
+- (void)applicationWillTerminate:(NSNotification *)notification {
+    (void)notification;
+    [self writeBrowserStateRunning:NO];
 }
 
 - (void)dealloc {
@@ -289,6 +296,137 @@ static void *BrowserCanGoForwardContext = &BrowserCanGoForwardContext;
     return [NSURL URLWithString:[@"https://www.google.com/search?q=" stringByAppendingString:query]];
 }
 
+- (NSString *)supportDirectoryPath {
+    NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
+                                                                     NSUserDomainMask,
+                                                                     YES);
+    NSString *base = paths.firstObject ?: NSTemporaryDirectory();
+    NSString *directory = [base stringByAppendingPathComponent:@"MiniBrowser"];
+
+    NSError *error = nil;
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:&error];
+    if (error) {
+        NSLog(@"Could not create MiniBrowser support directory: %@", error.localizedDescription);
+    }
+
+    return directory;
+}
+
+- (NSString *)historyFilePath {
+    return [[self supportDirectoryPath] stringByAppendingPathComponent:@"history.jsonl"];
+}
+
+- (NSString *)stateFilePath {
+    return [[self supportDirectoryPath] stringByAppendingPathComponent:@"state.json"];
+}
+
+- (BOOL)isSensitiveQueryName:(NSString *)name {
+    NSString *lower = name.lowercaseString;
+    NSArray<NSString *> *markers = @[ @"token", @"secret", @"password", @"passwd",
+                                      @"pass", @"auth", @"session", @"sid", @"key",
+                                      @"credential", @"code" ];
+    for (NSString *marker in markers) {
+        if ([lower containsString:marker]) return YES;
+    }
+    return NO;
+}
+
+- (NSString *)redactedURLStringForURL:(NSURL *)url {
+    NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    if (!components) return url.absoluteString ?: @"";
+
+    NSMutableArray<NSURLQueryItem *> *redactedItems = [NSMutableArray array];
+    for (NSURLQueryItem *item in components.queryItems ?: @[]) {
+        NSString *value = [self isSensitiveQueryName:item.name] ? @"[redacted]" : item.value;
+        [redactedItems addObject:[NSURLQueryItem queryItemWithName:item.name value:value]];
+    }
+    if (redactedItems.count > 0) {
+        components.queryItems = redactedItems;
+    }
+
+    return components.URL.absoluteString ?: url.absoluteString ?: @"";
+}
+
+- (void)appendJSONLine:(NSDictionary<NSString *, id> *)entry toPath:(NSString *)path {
+    if (![NSJSONSerialization isValidJSONObject:entry]) return;
+
+    NSError *error = nil;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:entry options:0 error:&error];
+    if (!json) {
+        NSLog(@"Could not encode JSON line: %@", error.localizedDescription);
+        return;
+    }
+
+    NSMutableData *line = [json mutableCopy];
+    const char newline = '\n';
+    [line appendBytes:&newline length:1];
+
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        if (![line writeToFile:path options:NSDataWritingAtomic error:&error]) {
+            NSLog(@"Could not create %@: %@", path, error.localizedDescription);
+        }
+        return;
+    }
+
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!handle) return;
+    @try {
+        [handle seekToEndOfFile];
+        [handle writeData:line];
+    } @catch (NSException *exception) {
+        NSLog(@"Could not append history: %@", exception.reason);
+    } @finally {
+        [handle closeFile];
+    }
+}
+
+- (NSDateFormatter *)historyDateFormatter {
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ssZZZZZ";
+    return formatter;
+}
+
+- (void)recordHistoryEntryForWebView:(WKWebView *)webView {
+    NSURL *url = webView.URL;
+    if (!url) return;
+
+    NSString *urlString = [self redactedURLStringForURL:url];
+    if (urlString.length == 0) return;
+
+    if ([self.lastRecordedURL isEqualToString:urlString]) return;
+    self.lastRecordedURL = urlString;
+
+    NSDictionary<NSString *, id> *entry = @{
+        @"timestamp": [[self historyDateFormatter] stringFromDate:[NSDate date]],
+        @"url": urlString,
+        @"title": webView.title ?: @"",
+        @"host": url.host ?: @"",
+        @"source": @"MiniBrowser"
+    };
+
+    [self appendJSONLine:entry toPath:[self historyFilePath]];
+}
+
+- (void)writeBrowserStateRunning:(BOOL)running {
+    NSDictionary<NSString *, id> *state = @{
+        @"running": @(running),
+        @"updatedAt": [[self historyDateFormatter] stringFromDate:[NSDate date]],
+        @"historyFile": [self historyFilePath],
+        @"cookiesExposed": @NO
+    };
+
+    NSError *error = nil;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:state
+                                                   options:NSJSONWritingPrettyPrinted
+                                                     error:&error];
+    if (!json) return;
+    [json writeToFile:[self stateFilePath] options:NSDataWritingAtomic error:nil];
+}
+
 - (void)goBack:(id)sender {
     (void)sender;
     if (self.webView.canGoBack) [self.webView goBack];
@@ -383,6 +521,8 @@ static void *BrowserCanGoForwardContext = &BrowserCanGoForwardContext;
     (void)navigation;
     self.statusLabel.stringValue = @"Ready";
     [self syncAddressBarWithWebView];
+    [self recordHistoryEntryForWebView:self.webView];
+    [self writeBrowserStateRunning:YES];
     [self updateControls];
 }
 

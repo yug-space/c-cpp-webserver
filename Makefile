@@ -5,6 +5,7 @@ APP_NAME = MiniBrowser
 APP_BUNDLE = $(APP_NAME).app
 APP_BIN = $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 APP_PLIST = $(APP_BUNDLE)/Contents/Info.plist
+MCP_DIR = mcp-history-server
 
 all: mini_browser
 
@@ -21,7 +22,13 @@ $(APP_PLIST): mac-browser/Info.plist
 run-browser: mini_browser           # Open the native app
 	open $(APP_BUNDLE)
 
+mcp-install:                       # Install MCP server dependencies
+	cd $(MCP_DIR) && npm install
+
+run-history-mcp:                   # Run read-only history MCP server over stdio
+	cd $(MCP_DIR) && npm start
+
 clean:                             # Remove built binaries
 	rm -rf $(APP_BUNDLE)
 
-.PHONY: all mini_browser run-browser clean
+.PHONY: all mini_browser run-browser mcp-install run-history-mcp clean
