@@ -12,12 +12,13 @@ TCP connection, read the request, and return a fixed HTML page.
 | `server.cpp` | The C++ server, listens on port **8081**                |
 | `proxy.c`    | C forward proxy — fetches real sites, port **8080**     |
 | `proxy.cpp`  | C++ forward proxy — fetches real sites, port **8081**   |
-| `Makefile`   | Builds all four binaries                                |
+| `mac-browser/Browser.m` | Native macOS browser shell using AppKit + WebKit |
+| `Makefile`   | Builds the servers, proxies, and macOS browser app      |
 
 ## Build
 
 ```sh
-make            # builds server_c and server_cpp
+make            # builds the servers, proxies, and MiniBrowser.app
 ```
 
 Or compile by hand:
@@ -35,6 +36,48 @@ g++ -Wall -O2 -std=c++17 -o server_cpp server.cpp
 ```
 
 Stop a server with `Ctrl+C`.
+
+## Native macOS browser app
+
+The `mac-browser/Browser.m` program is a small Chrome/Safari-style browser shell
+written in Objective-C. It uses:
+
+- **AppKit** for the native macOS window, toolbar, buttons, address field, and
+  progress indicator.
+- **WebKit** via `WKWebView` for real webpage rendering, JavaScript, CSS,
+  images, history, and navigation.
+
+Build it:
+
+```sh
+make mini_browser
+```
+
+Run it:
+
+```sh
+make run-browser
+```
+
+Or open it directly:
+
+```sh
+open MiniBrowser.app
+```
+
+What it supports:
+
+- Loads `https://www.google.com` on launch.
+- Address/search bar.
+- Back, forward, reload, and stop.
+- Loading progress.
+- Native macOS titlebar and toolbar material.
+- `Cmd+L`, `Cmd+R`, `Cmd+[`, and `Cmd+]` shortcuts.
+
+This is a real native browser application, but not a custom browser engine. The
+engine is WebKit, the same family of technology used by Safari. Writing a full
+Chrome-style engine from scratch would require building HTML/CSS/JS/layout/paint
+systems separately.
 
 ## How it works
 

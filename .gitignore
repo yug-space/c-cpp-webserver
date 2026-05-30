@@ -3,6 +3,7 @@ server_c
 server_cpp
 proxy_c
 proxy_cpp
+MiniBrowser.app
 
 # macOS
 .DS_Store
