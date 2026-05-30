@@ -8,7 +8,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const DEFAULT_SUPPORT_DIR = path.join(os.homedir(), "Library", "Application Support", "TrailBrowser");
+function defaultSupportDir() {
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "TrailBrowser");
+  }
+
+  const dataHome = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+  return path.join(dataHome, "trailbrowser");
+}
+
+const DEFAULT_SUPPORT_DIR = defaultSupportDir();
 const HISTORY_FILE = process.env.TRAILBROWSER_HISTORY_FILE ||
   path.join(DEFAULT_SUPPORT_DIR, "history.jsonl");
 const STATE_FILE = process.env.TRAILBROWSER_STATE_FILE ||
@@ -131,13 +140,15 @@ function readState() {
 }
 
 function isTrailBrowserRunning() {
-  if (process.platform !== "darwin") return null;
-  try {
-    execFileSync("pgrep", ["-x", "TrailBrowser"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
+  for (const processName of ["TrailBrowser", "trailbrowser"]) {
+    try {
+      execFileSync("pgrep", ["-x", processName], { stdio: "ignore" });
+      return true;
+    } catch {
+      // Try the next platform-specific binary name.
+    }
   }
+  return false;
 }
 
 const server = new McpServer({

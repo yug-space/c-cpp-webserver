@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TrailBrowser Home</title>
+  <link rel="stylesheet" href="Home.css">
+</head>
+<body>
+  <main class="home-shell">
+    <section class="brand">
+      <div class="brand-orb" aria-hidden="true"></div>
+      <div>
+        <h1>TrailBrowser</h1>
+        <p>Open a site, search Google, or run native Codex Deep Search.</p>
+      </div>
+    </section>
+
+    <section class="command-bar">
+      <input id="query" autofocus autocomplete="off" spellcheck="false"
+             placeholder="Search, paste a URL, or ask Deep Search">
+      <button id="open" class="open-button" type="button">Open</button>
+      <button id="deep-search" class="deep-button" type="button">Deep Search</button>
+    </section>
+
+    <section class="shortcuts" aria-label="Shortcuts">
+      <button data-open="google.com" type="button">Google</button>
+      <button data-open="youtube.com" type="button">YouTube</button>
+      <button data-open="github.com" type="button">GitHub</button>
+      <button data-open="news.ycombinator.com" type="button">HN</button>
+    </section>
+  </main>
+
+  <script src="Home.js"></script>
+</body>
+</html>

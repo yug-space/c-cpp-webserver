@@ -1,0 +1,415 @@
+// ChromeCookieImporter.m - see ChromeCookieImporter.h for the contract.
+//
+// Pipeline: locate the Chrome user-data dir -> read the per-profile Cookies
+// SQLite database -> fetch the AES key from "Chrome Safe Storage" in the
+// Keychain -> decrypt each value (AES-128-CBC) -> build NSHTTPCookie objects ->
+// inject them into the supplied WKHTTPCookieStore.
+
+#import "ChromeCookieImporter.h"
+
+#import <WebKit/WebKit.h>
+#import <Security/Security.h>
+#import <CommonCrypto/CommonCrypto.h>
+#import <sqlite3.h>
+
+static NSString *const kChromeCookieErrorDomain = @"TrailBrowser.ChromeCookieImporter";
+
+// Chrome stores timestamps as microseconds since 1601-01-01; subtract this many
+// seconds to reach the Unix epoch (1970-01-01).
+static const double kWindowsEpochToUnixSeconds = 11644473600.0;
+
+@implementation ChromeProfile
+@end
+
+@implementation ChromeCookieImportResult
+@end
+
+@implementation ChromeCookieImporter
+
+#pragma mark - Filesystem layout
+
+// Root Chrome user-data directory for the current user, or nil if Chrome's
+// folder is absent.
++ (nullable NSString *)chromeUserDataDirectory {
+    NSString *home = NSHomeDirectory();
+    NSString *path = [home stringByAppendingPathComponent:
+                      @"Library/Application Support/Google/Chrome"];
+    BOOL isDir = NO;
+    if ([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDir] && isDir) {
+        return path;
+    }
+    return nil;
+}
+
++ (BOOL)isChromeInstalled {
+    return [self chromeUserDataDirectory] != nil;
+}
+
+// Resolve the Cookies SQLite file for a profile. Recent Chrome keeps it under
+// the "Network" subdirectory; older versions kept it at the profile root.
++ (nullable NSString *)cookiesPathForProfileDirectory:(NSString *)directory {
+    NSString *root = [self chromeUserDataDirectory];
+    if (!root) return nil;
+
+    NSString *profileRoot = [root stringByAppendingPathComponent:directory];
+    NSArray<NSString *> *candidates = @[
+        [profileRoot stringByAppendingPathComponent:@"Network/Cookies"],
+        [profileRoot stringByAppendingPathComponent:@"Cookies"],
+    ];
+    for (NSString *candidate in candidates) {
+        if ([[NSFileManager defaultManager] fileExistsAtPath:candidate]) {
+            return candidate;
+        }
+    }
+    return nil;
+}
+
+#pragma mark - Profiles
+
++ (NSArray<ChromeProfile *> *)availableProfiles {
+    NSString *root = [self chromeUserDataDirectory];
+    if (!root) return @[];
+
+    // "Local State" carries friendly names and account emails per profile dir.
+    NSDictionary *infoCache = nil;
+    NSData *localState = [NSData dataWithContentsOfFile:
+                          [root stringByAppendingPathComponent:@"Local State"]];
+    if (localState) {
+        NSDictionary *parsed = [NSJSONSerialization JSONObjectWithData:localState
+                                                              options:0
+                                                                error:NULL];
+        if ([parsed isKindOfClass:[NSDictionary class]]) {
+            NSDictionary *profile = parsed[@"profile"];
+            if ([profile isKindOfClass:[NSDictionary class]] &&
+                [profile[@"info_cache"] isKindOfClass:[NSDictionary class]]) {
+                infoCache = profile[@"info_cache"];
+            }
+        }
+    }
+
+    NSArray<NSString *> *entries = [[NSFileManager defaultManager]
+                                    contentsOfDirectoryAtPath:root error:NULL] ?: @[];
+    NSMutableArray<ChromeProfile *> *profiles = [NSMutableArray array];
+
+    for (NSString *entry in entries) {
+        BOOL looksLikeProfile = [entry isEqualToString:@"Default"] ||
+                                [entry hasPrefix:@"Profile "];
+        if (!looksLikeProfile) continue;
+        if (![self cookiesPathForProfileDirectory:entry]) continue;  // no cookies, skip
+
+        NSDictionary *cache = infoCache[entry];
+        NSString *name = nil;
+        NSString *email = nil;
+        if ([cache isKindOfClass:[NSDictionary class]]) {
+            name = [cache[@"name"] isKindOfClass:[NSString class]] ? cache[@"name"] : nil;
+            email = [cache[@"user_name"] isKindOfClass:[NSString class]] ? cache[@"user_name"] : nil;
+        }
+
+        ChromeProfile *profile = [[ChromeProfile alloc] init];
+        profile.directory = entry;
+        profile.displayName = name.length ? name : entry;
+        profile.email = email.length ? email : nil;
+        [profiles addObject:profile];
+    }
+
+    // Show "Default" first, then "Profile 1", "Profile 2", ... in order.
+    [profiles sortUsingComparator:^NSComparisonResult(ChromeProfile *a, ChromeProfile *b) {
+        if ([a.directory isEqualToString:@"Default"]) return NSOrderedAscending;
+        if ([b.directory isEqualToString:@"Default"]) return NSOrderedDescending;
+        return [a.directory compare:b.directory options:NSNumericSearch];
+    }];
+
+    return profiles;
+}
+
+#pragma mark - Decryption key
+
+// The AES key is PBKDF2(HMAC-SHA1) over the "Chrome Safe Storage" Keychain
+// password with a fixed salt and iteration count, matching Chromium's
+// OSCrypt on macOS.
++ (nullable NSData *)decryptionKeyWithError:(NSError **)error {
+    NSDictionary *query = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: @"Chrome Safe Storage",
+        (__bridge id)kSecAttrAccount: @"Chrome",
+        (__bridge id)kSecReturnData: @YES,
+        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
+    };
+
+    CFTypeRef raw = NULL;
+    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &raw);
+    if (status != errSecSuccess || raw == NULL) {
+        if (error) {
+            NSString *message;
+            if (status == errSecItemNotFound) {
+                message = @"No \"Chrome Safe Storage\" key found in the Keychain. "
+                           "Is Google Chrome installed?";
+            } else if (status == errSecUserCanceled || status == errSecAuthFailed) {
+                message = @"Keychain access for \"Chrome Safe Storage\" was denied.";
+            } else {
+                NSString *detail = (__bridge_transfer NSString *)SecCopyErrorMessageString(status, NULL);
+                message = [NSString stringWithFormat:
+                           @"Could not read the Chrome Safe Storage key (%d): %@",
+                           (int)status, detail ?: @"unknown error"];
+            }
+            *error = [NSError errorWithDomain:kChromeCookieErrorDomain
+                                         code:status
+                                     userInfo:@{NSLocalizedDescriptionKey: message}];
+        }
+        return nil;
+    }
+
+    NSData *password = (__bridge_transfer NSData *)raw;
+
+    unsigned char derived[kCCKeySizeAES128];
+    const char *salt = "saltysalt";
+    int result = CCKeyDerivationPBKDF(kCCPBKDF2,
+                                      password.bytes, password.length,
+                                      (const uint8_t *)salt, strlen(salt),
+                                      kCCPRFHmacAlgSHA1, 1003,
+                                      derived, sizeof(derived));
+    if (result != kCCSuccess) {
+        if (error) {
+            *error = [NSError errorWithDomain:kChromeCookieErrorDomain
+                                         code:result
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"Failed to derive the Chrome cookie key."}];
+        }
+        return nil;
+    }
+
+    return [NSData dataWithBytes:derived length:sizeof(derived)];
+}
+
+// Decrypt a single "v10"/"v11"-prefixed encrypted_value blob. Returns nil for
+// blobs we cannot decrypt (caller falls back to the plaintext value column).
++ (nullable NSString *)decryptValue:(NSData *)encrypted withKey:(NSData *)key {
+    if (encrypted.length <= 3) return nil;
+
+    const unsigned char *bytes = encrypted.bytes;
+    if (!(bytes[0] == 'v' && (bytes[1] == '1') && (bytes[2] == '0' || bytes[2] == '1'))) {
+        return nil;  // not the macOS v10/v11 scheme
+    }
+
+    NSData *cipher = [encrypted subdataWithRange:NSMakeRange(3, encrypted.length - 3)];
+    if (cipher.length == 0 || (cipher.length % kCCBlockSizeAES128) != 0) return nil;
+
+    // Chromium uses a 16-space IV for cookie values on macOS.
+    unsigned char iv[kCCBlockSizeAES128];
+    memset(iv, ' ', sizeof(iv));
+
+    size_t bufferSize = cipher.length + kCCBlockSizeAES128;
+    NSMutableData *plain = [NSMutableData dataWithLength:bufferSize];
+    size_t decryptedLength = 0;
+
+    CCCryptorStatus status = CCCrypt(kCCDecrypt, kCCAlgorithmAES128, kCCOptionPKCS7Padding,
+                                     key.bytes, key.length,
+                                     iv,
+                                     cipher.bytes, cipher.length,
+                                     plain.mutableBytes, bufferSize, &decryptedLength);
+    if (status != kCCSuccess) return nil;
+    plain.length = decryptedLength;
+
+    // Chrome v24+ prepends a 32-byte SHA-256 hash of the cookie's domain to the
+    // plaintext. If the value doesn't decode as UTF-8 but the 32-byte-stripped
+    // version does, drop the prefix.
+    NSString *full = [[NSString alloc] initWithData:plain encoding:NSUTF8StringEncoding];
+    if (full) return full;
+
+    if (plain.length > 32) {
+        NSData *stripped = [plain subdataWithRange:NSMakeRange(32, plain.length - 32)];
+        NSString *value = [[NSString alloc] initWithData:stripped encoding:NSUTF8StringEncoding];
+        if (value) return value;
+    }
+    return nil;
+}
+
+#pragma mark - Extraction
+
++ (nullable NSArray<NSHTTPCookie *> *)cookiesForProfileDirectory:(NSString *)directory
+                                                          error:(NSError **)error {
+    NSString *cookiesPath = [self cookiesPathForProfileDirectory:directory];
+    if (!cookiesPath) {
+        if (error) {
+            *error = [NSError errorWithDomain:kChromeCookieErrorDomain
+                                         code:1
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"No cookies database found for this Chrome profile."}];
+        }
+        return nil;
+    }
+
+    NSData *key = [self decryptionKeyWithError:error];
+    if (!key) return nil;
+
+    // Chrome keeps the database open; copy it so we never contend on its lock.
+    NSString *tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                          [NSString stringWithFormat:@"TrailBrowser-Cookies-%@.sqlite",
+                           [[NSUUID UUID] UUIDString]]];
+    NSError *copyError = nil;
+    [[NSFileManager defaultManager] removeItemAtPath:tempPath error:NULL];
+    if (![[NSFileManager defaultManager] copyItemAtPath:cookiesPath toPath:tempPath error:&copyError]) {
+        if (error) {
+            *error = [NSError errorWithDomain:kChromeCookieErrorDomain
+                                         code:2
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:
+                                                     @"Could not read the Chrome cookies database: %@",
+                                                     copyError.localizedDescription ?: @"unknown error"]}];
+        }
+        return nil;
+    }
+
+    sqlite3 *db = NULL;
+    NSMutableArray<NSHTTPCookie *> *cookies = [NSMutableArray array];
+
+    int rc = sqlite3_open_v2(tempPath.fileSystemRepresentation, &db,
+                             SQLITE_OPEN_READONLY, NULL);
+    if (rc != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        [[NSFileManager defaultManager] removeItemAtPath:tempPath error:NULL];
+        if (error) {
+            *error = [NSError errorWithDomain:kChromeCookieErrorDomain
+                                         code:rc
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"Could not open the Chrome cookies database."}];
+        }
+        return nil;
+    }
+
+    const char *sql =
+        "SELECT host_key, name, value, encrypted_value, path, "
+        "expires_utc, is_secure, is_httponly, samesite FROM cookies";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        sqlite3_close(db);
+        [[NSFileManager defaultManager] removeItemAtPath:tempPath error:NULL];
+        if (error) {
+            *error = [NSError errorWithDomain:kChromeCookieErrorDomain
+                                         code:3
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"Could not query the Chrome cookies database."}];
+        }
+        return nil;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        NSString *host = [self stringFromColumn:0 of:stmt];
+        NSString *name = [self stringFromColumn:1 of:stmt];
+        NSString *plainValue = [self stringFromColumn:2 of:stmt];
+        NSString *path = [self stringFromColumn:4 of:stmt];
+        long long expiresUtc = sqlite3_column_int64(stmt, 5);
+        BOOL isSecure = sqlite3_column_int(stmt, 6) != 0;
+        BOOL isHTTPOnly = sqlite3_column_int(stmt, 7) != 0;
+        int sameSite = sqlite3_column_int(stmt, 8);
+
+        if (host.length == 0 || name.length == 0) continue;
+
+        NSString *value = nil;
+        const void *blob = sqlite3_column_blob(stmt, 3);
+        int blobLength = sqlite3_column_bytes(stmt, 3);
+        if (blob && blobLength > 0) {
+            NSData *encrypted = [NSData dataWithBytes:blob length:blobLength];
+            value = [self decryptValue:encrypted withKey:key];
+        }
+        if (value == nil) value = plainValue;   // unencrypted fallback
+        if (value == nil) continue;
+
+        NSHTTPCookie *cookie = [self cookieWithHost:host
+                                               name:name
+                                              value:value
+                                               path:path
+                                         expiresUtc:expiresUtc
+                                             secure:isSecure
+                                           httpOnly:isHTTPOnly
+                                           sameSite:sameSite];
+        if (cookie) [cookies addObject:cookie];
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    [[NSFileManager defaultManager] removeItemAtPath:tempPath error:NULL];
+
+    return cookies;
+}
+
++ (nullable NSString *)stringFromColumn:(int)column of:(sqlite3_stmt *)stmt {
+    const unsigned char *text = sqlite3_column_text(stmt, column);
+    if (!text) return nil;
+    return [NSString stringWithUTF8String:(const char *)text];
+}
+
+#pragma mark - Cookie construction
+
++ (nullable NSHTTPCookie *)cookieWithHost:(NSString *)host
+                                     name:(NSString *)name
+                                    value:(NSString *)value
+                                     path:(nullable NSString *)path
+                               expiresUtc:(long long)expiresUtc
+                                   secure:(BOOL)secure
+                                 httpOnly:(BOOL)httpOnly
+                                 sameSite:(int)sameSite {
+    NSMutableDictionary *properties = [NSMutableDictionary dictionary];
+    properties[NSHTTPCookieName] = name;
+    properties[NSHTTPCookieValue] = value;
+    properties[NSHTTPCookieDomain] = host;                       // leading "." preserved
+    properties[NSHTTPCookiePath] = path.length ? path : @"/";
+    if (secure) properties[NSHTTPCookieSecure] = @"TRUE";
+    if (httpOnly) properties[@"HttpOnly"] = @YES;
+
+    // expires_utc == 0 marks a session cookie; leave NSHTTPCookieExpires unset.
+    if (expiresUtc > 0) {
+        double unixSeconds = (double)expiresUtc / 1000000.0 - kWindowsEpochToUnixSeconds;
+        if (unixSeconds > 0) {
+            properties[NSHTTPCookieExpires] = [NSDate dateWithTimeIntervalSince1970:unixSeconds];
+        }
+    }
+
+    if (@available(macOS 10.15, *)) {
+        // Chrome samesite: -1 unspecified, 0 none, 1 lax, 2 strict.
+        if (sameSite == 1) {
+            properties[NSHTTPCookieSameSitePolicy] = NSHTTPCookieSameSiteLax;
+        } else if (sameSite == 2) {
+            properties[NSHTTPCookieSameSitePolicy] = NSHTTPCookieSameSiteStrict;
+        }
+    }
+
+    return [NSHTTPCookie cookieWithProperties:properties];
+}
+
+#pragma mark - Import
+
++ (void)importProfileDirectory:(NSString *)directory
+               intoCookieStore:(WKHTTPCookieStore *)store
+                    completion:(void (^)(ChromeCookieImportResult *_Nullable,
+                                         NSError *_Nullable))completion {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSError *error = nil;
+        NSArray<NSHTTPCookie *> *cookies = [self cookiesForProfileDirectory:directory error:&error];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (cookies == nil) {
+                completion(nil, error);
+                return;
+            }
+
+            ChromeCookieImportResult *result = [[ChromeCookieImportResult alloc] init];
+            if (cookies.count == 0) {
+                completion(result, nil);
+                return;
+            }
+
+            __block NSUInteger remaining = cookies.count;
+            for (NSHTTPCookie *cookie in cookies) {
+                [store setCookie:cookie completionHandler:^{
+                    result.imported += 1;
+                    if (--remaining == 0) {
+                        completion(result, nil);
+                    }
+                }];
+            }
+        });
+    });
+}
+
+@end
