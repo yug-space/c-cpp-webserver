@@ -1,11 +1,11 @@
 {
-  "name": "minibrowser-history-mcp",
+  "name": "trailbrowser-history-mcp",
   "version": "1.0.0",
-  "description": "Read-only MCP server for MiniBrowser browsing history.",
+  "description": "Read-only MCP server for TrailBrowser browsing history.",
   "type": "module",
   "private": true,
   "bin": {
-    "minibrowser-history-mcp": "./server.mjs"
+    "trailbrowser-history-mcp": "./server.mjs"
   },
   "scripts": {
     "start": "node server.mjs"

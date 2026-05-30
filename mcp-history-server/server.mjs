@@ -8,10 +8,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const DEFAULT_SUPPORT_DIR = path.join(os.homedir(), "Library", "Application Support", "MiniBrowser");
-const HISTORY_FILE = process.env.MINIBROWSER_HISTORY_FILE ||
+const DEFAULT_SUPPORT_DIR = path.join(os.homedir(), "Library", "Application Support", "TrailBrowser");
+const HISTORY_FILE = process.env.TRAILBROWSER_HISTORY_FILE ||
   path.join(DEFAULT_SUPPORT_DIR, "history.jsonl");
-const STATE_FILE = process.env.MINIBROWSER_STATE_FILE ||
+const STATE_FILE = process.env.TRAILBROWSER_STATE_FILE ||
   path.join(DEFAULT_SUPPORT_DIR, "state.json");
 
 const MAX_LIMIT = 200;
@@ -64,7 +64,7 @@ function normalizeEntry(entry) {
     title: String(entry.title || ""),
     url: redactedUrl,
     host: String(entry.host || hostFromUrl(redactedUrl) || ""),
-    source: "MiniBrowser",
+    source: "TrailBrowser",
   };
 }
 
@@ -121,7 +121,7 @@ function readState() {
   }
 
   return {
-    running: isMiniBrowserRunning(),
+    running: isTrailBrowserRunning(),
     appStateFileRunning: Boolean(state.running),
     appStateUpdatedAt: state.updatedAt || null,
     historyFile: HISTORY_FILE,
@@ -130,10 +130,10 @@ function readState() {
   };
 }
 
-function isMiniBrowserRunning() {
+function isTrailBrowserRunning() {
   if (process.platform !== "darwin") return null;
   try {
-    execFileSync("pgrep", ["-x", "MiniBrowser"], { stdio: "ignore" });
+    execFileSync("pgrep", ["-x", "TrailBrowser"], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -141,20 +141,20 @@ function isMiniBrowserRunning() {
 }
 
 const server = new McpServer({
-  name: "minibrowser-history",
+  name: "trailbrowser-history",
   version: "1.0.0",
 });
 
 server.tool(
   "browser_status",
-  "Report MiniBrowser runtime status and history file location. Cookies are never exposed.",
+  "Report TrailBrowser runtime status and history file location. Cookies are never exposed.",
   {},
   async () => jsonText(readState()),
 );
 
 server.tool(
   "history_recent",
-  "Return recent MiniBrowser history entries from the local history file.",
+  "Return recent TrailBrowser history entries from the local history file.",
   {
     limit: z.number().int().min(1).max(MAX_LIMIT).optional(),
   },
@@ -166,7 +166,7 @@ server.tool(
 
 server.tool(
   "history_search",
-  "Search MiniBrowser history by URL, title, or host.",
+  "Search TrailBrowser history by URL, title, or host.",
   {
     query: z.string().min(1),
     limit: z.number().int().min(1).max(MAX_LIMIT).optional(),
@@ -187,7 +187,7 @@ server.tool(
 
 server.tool(
   "history_by_domain",
-  "Return MiniBrowser history entries for one host/domain.",
+  "Return TrailBrowser history entries for one host/domain.",
   {
     domain: z.string().min(1),
     limit: z.number().int().min(1).max(MAX_LIMIT).optional(),
@@ -205,7 +205,7 @@ server.tool(
 
 server.tool(
   "history_top_domains",
-  "Return the most frequently visited domains in MiniBrowser history.",
+  "Return the most frequently visited domains in TrailBrowser history.",
   {
     limit: z.number().int().min(1).max(100).optional(),
   },

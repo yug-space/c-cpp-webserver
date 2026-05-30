@@ -1,4 +1,4 @@
-# MiniBrowser
+# TrailBrowser
 
 A small native macOS browser written in Objective-C with AppKit and Apple's
 WebKit framework.
@@ -19,8 +19,8 @@ This project builds a real `.app` bundle with:
 |------|---------|
 | `mac-browser/Browser.m` | Objective-C AppKit + WebKit browser app |
 | `mac-browser/Info.plist` | macOS app bundle metadata |
-| `mcp-history-server/server.mjs` | Read-only MCP server for MiniBrowser history |
-| `Makefile` | Builds and opens `MiniBrowser.app` |
+| `mcp-history-server/server.mjs` | Read-only MCP server for TrailBrowser history |
+| `Makefile` | Builds and opens `TrailBrowser.app` |
 
 ## Build
 
@@ -31,7 +31,7 @@ make
 This creates:
 
 ```text
-MiniBrowser.app
+TrailBrowser.app
 ```
 
 ## Run
@@ -43,7 +43,7 @@ make run-browser
 Or:
 
 ```sh
-open MiniBrowser.app
+open TrailBrowser.app
 ```
 
 ## Clean
@@ -54,10 +54,10 @@ make clean
 
 ## History MCP Server
 
-MiniBrowser writes its own browsing history to:
+TrailBrowser writes its own browsing history to:
 
 ```text
-~/Library/Application Support/MiniBrowser/history.jsonl
+~/Library/Application Support/TrailBrowser/history.jsonl
 ```
 
 The MCP server reads that file and exposes read-only tools:
@@ -82,7 +82,7 @@ make run-history-mcp
 
 The server intentionally does **not** read Chrome profiles, decrypt Keychain
 data, copy cookies, or expose session cookies. Cookies are account credentials;
-MiniBrowser keeps WebKit cookies inside WebKit's own browser storage.
+TrailBrowser keeps WebKit cookies inside WebKit's own browser storage.
 
 ## How It Works
 

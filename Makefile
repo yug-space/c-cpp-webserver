@@ -1,7 +1,7 @@
 # Build the native macOS browser app. Run `make`, then `make run-browser`.
 
 OBJCFLAGS = -Wall -Wextra -O2 -fobjc-arc
-APP_NAME = MiniBrowser
+APP_NAME = TrailBrowser
 APP_BUNDLE = $(APP_NAME).app
 APP_BIN = $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 APP_PLIST = $(APP_BUNDLE)/Contents/Info.plist

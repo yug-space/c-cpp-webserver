@@ -54,13 +54,13 @@ static void *BrowserCanGoForwardContext = &BrowserCanGoForwardContext;
 - (void)buildMenu {
     NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@""];
 
-    NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:@"MiniBrowser"
+    NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:@"TrailBrowser"
                                                          action:nil
                                                   keyEquivalent:@""];
     [mainMenu addItem:appMenuItem];
 
-    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"MiniBrowser"];
-    NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:@"Quit MiniBrowser"
+    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"TrailBrowser"];
+    NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:@"Quit TrailBrowser"
                                                       action:@selector(terminate:)
                                                keyEquivalent:@"q"];
     [appMenu addItem:quitItem];
@@ -101,7 +101,7 @@ static void *BrowserCanGoForwardContext = &BrowserCanGoForwardContext;
                                               styleMask:style
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO];
-    self.window.title = @"MiniBrowser";
+    self.window.title = @"TrailBrowser";
     self.window.titleVisibility = NSWindowTitleHidden;
     self.window.titlebarAppearsTransparent = YES;
     self.window.minSize = NSMakeSize(860, 560);
@@ -301,7 +301,7 @@ static void *BrowserCanGoForwardContext = &BrowserCanGoForwardContext;
                                                                      NSUserDomainMask,
                                                                      YES);
     NSString *base = paths.firstObject ?: NSTemporaryDirectory();
-    NSString *directory = [base stringByAppendingPathComponent:@"MiniBrowser"];
+    NSString *directory = [base stringByAppendingPathComponent:@"TrailBrowser"];
 
     NSError *error = nil;
     [[NSFileManager defaultManager] createDirectoryAtPath:directory
@@ -309,7 +309,7 @@ static void *BrowserCanGoForwardContext = &BrowserCanGoForwardContext;
                                                attributes:nil
                                                     error:&error];
     if (error) {
-        NSLog(@"Could not create MiniBrowser support directory: %@", error.localizedDescription);
+        NSLog(@"Could not create TrailBrowser support directory: %@", error.localizedDescription);
     }
 
     return directory;
@@ -405,7 +405,7 @@ static void *BrowserCanGoForwardContext = &BrowserCanGoForwardContext;
         @"url": urlString,
         @"title": webView.title ?: @"",
         @"host": url.host ?: @"",
-        @"source": @"MiniBrowser"
+        @"source": @"TrailBrowser"
     };
 
     [self appendJSONLine:entry toPath:[self historyFilePath]];
